@@ -1,0 +1,8 @@
+create an environment by the following commands:
+python -m venv venv
+venv\Scripts\activate
+
+then run this to install all the independancies:
+pip install -r requirements.txt 
+
+

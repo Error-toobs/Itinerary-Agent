@@ -1,0 +1,12 @@
+numpy
+pandas
+langchain_core
+langchain_openai
+langgraph
+sentence_transformers
+typing_extensions
+scikit-learn
+openpyxl
+dotenv
+fastapi
+uvicorn
