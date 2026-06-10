@@ -1,4 +1,6 @@
 from __future__ import annotations
+import pickle
+from pathlib import Path
 import difflib
 import json
 import os
@@ -141,6 +143,37 @@ def auto_balance_clusters(
         del clusters[c2]
 
     # ------------------------------------------------------------
+# STEP 1B: Split clusters if fewer clusters than target_days
+# ------------------------------------------------------------
+
+    while len(clusters) < target_days:
+
+        # Find largest cluster
+        largest_cluster_id = max(
+            clusters,
+            key=lambda k: len(clusters[k])
+        )
+
+        largest_cluster = clusters[largest_cluster_id]
+
+        # Cannot split cluster with 1 attraction
+        if len(largest_cluster) <= 1:
+            break
+
+        # Split cluster into two halves
+        mid = len(largest_cluster) // 2
+
+        new_cluster_1 = largest_cluster[:mid]
+        new_cluster_2 = largest_cluster[mid:]
+
+        # Replace old cluster
+        clusters[largest_cluster_id] = new_cluster_1
+
+        # Create new cluster ID
+        new_cluster_id = max(clusters.keys()) + 1
+
+        clusters[new_cluster_id] = new_cluster_2
+    # ------------------------------------------------------------
     # STEP 2: Evenly redistribute if highly uneven
     # ------------------------------------------------------------
 
@@ -232,7 +265,7 @@ def nearest_from_pool(
 
 class ItineraryState(TypedDict):
     # Input
-    user_query: str
+    # user_query: str
 
     # Query parser output
     parsed_days:        Optional[int]
@@ -334,21 +367,89 @@ def make_nearby_tool(place_coordinates: Dict[str, Dict[str, float]]):
 # Pipeline
 # ---------------------------------------------------------------------------
 
+# class ItineraryGenerator:
+#     def __init__(self) -> None:
+#         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+#         self._load_and_embed_attractions()
+
+#     def _load_and_embed_attractions(self) -> None:
+#         self.df = DF_ATTRACTIONS.copy()
+#         self.df["search_text"] = self.df.apply(
+#             lambda r: f"{r['_key']} {r['category']} {r['Desc']} {r['district']}",
+#             axis=1,
+#         )
+#         # print("Embedding attraction data …")
+#         self.embeddings = self.embedding_model.encode(
+#             self.df["search_text"].tolist(), show_progress_bar=True
+#         )
 class ItineraryGenerator:
+
+    EMBEDDING_FILE = "data/attractions_embeddings.npy"
+    DATAFRAME_FILE = "data/attractions_processed.pkl"
+
     def __init__(self) -> None:
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         self._load_and_embed_attractions()
 
     def _load_and_embed_attractions(self) -> None:
+
+        embedding_path = Path(self.EMBEDDING_FILE)
+        dataframe_path = Path(self.DATAFRAME_FILE)
+
+        # ---------------------------------------------------------
+        # LOAD PRECOMPUTED FILES IF THEY EXIST
+        # ---------------------------------------------------------
+
+        if embedding_path.exists() and dataframe_path.exists():
+
+            print("Loading cached embeddings...")
+
+            self.embeddings = np.load(embedding_path)
+
+            with open(dataframe_path, "rb") as f:
+                self.df = pickle.load(f)
+
+            print("Embeddings loaded successfully.")
+            return
+
+        # ---------------------------------------------------------
+        # OTHERWISE GENERATE THEM
+        # ---------------------------------------------------------
+
+        print("Generating embeddings for first time...")
+
         self.df = DF_ATTRACTIONS.copy()
+
         self.df["search_text"] = self.df.apply(
-            lambda r: f"{r['_key']} {r['category']} {r['Desc']} {r['district']}",
+            lambda r: (
+                f"{r['_key']} "
+                # f"{r['category']} "
+                f"{r['Desc']} "
+                f"{r['city']} "
+                # f"{r['district']}"
+                f"{r['label']}"
+                # f"{r['district']}"
+            ),
             axis=1,
         )
-        # print("Embedding attraction data …")
+
         self.embeddings = self.embedding_model.encode(
-            self.df["search_text"].tolist(), show_progress_bar=True
+            self.df["search_text"].tolist(),
+            show_progress_bar=True
         )
+
+        # ---------------------------------------------------------
+        # SAVE TO DISK
+        # ---------------------------------------------------------
+
+        embedding_path.parent.mkdir(parents=True, exist_ok=True)
+
+        np.save(embedding_path, self.embeddings)
+
+        with open(dataframe_path, "wb") as f:
+            pickle.dump(self.df, f)
+
+        print("Embeddings generated and cached.")
 
     # ── Graph ──────────────────────────────────────────────────────────────
 
@@ -376,7 +477,7 @@ class ItineraryGenerator:
     def parse_query(self, state: ItineraryState) -> ItineraryState:
         prompt = f"""Analyse this travel query and return ONLY valid JSON — no markdown fences.
 
-Query: "{state['user_query']}"
+# Query: "{state['user_query']}"
 
 Return exactly this JSON structure:
 {{
@@ -405,7 +506,7 @@ Return exactly this JSON structure:
             return {
                 **state,
                 "parsed_days":        3,
-                "parsed_location":    state["user_query"],
+                # "parsed_location":    state["user_query"],
                 "parsed_preferences": ["sightseeing"],
                 "include_food":       False,
                 "include_souvenirs":  False,
@@ -424,7 +525,7 @@ Return exactly this JSON structure:
         if location:            state["parsed_location"] = location
         prefs     = state.get("parsed_preferences") or []
         
-        query_txt = f"{state['parsed_location']} {' '.join(prefs)}"
+        query_txt = f"{state['parsed_location']} {' '.join(prefs)}" 
         q_emb     = self.embedding_model.encode([query_txt])
         sims      = np.dot(self.embeddings, q_emb.T).flatten()
         # top_idx   = np.argsort(sims)[- state.get("parsed_days", 3) * 4:][::-1]
@@ -776,7 +877,7 @@ def main() -> None:
         # print("=" * 65)
 
         initial_state: ItineraryState = {
-            "user_query":            query,
+            # "user_query":            query,
             "parsed_days":           None,
             "parsed_location":       None,
             "parsed_preferences":    None,
